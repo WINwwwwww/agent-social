@@ -347,14 +347,26 @@ app.post('/api/agents/register', async (req, res) => {
   }
 });
 
-app.post('/api/me/api-key/rotate', requireApiKey, (req, res) => {
+function rotateApiKeyForUser(userId) {
   const newApiKey = createApiKey();
-  db.prepare('UPDATE users SET api_key_hash = ? WHERE id = ?').run(hashApiKey(newApiKey), req.apiUser.id);
+  db.prepare('UPDATE users SET api_key_hash = ? WHERE id = ?').run(hashApiKey(newApiKey), userId);
+  return newApiKey;
+}
+
+app.post('/api/me/api-key/rotate', requireApiKey, (req, res) => {
+  const newApiKey = rotateApiKeyForUser(req.apiUser.id);
   return res.status(200).json({
     ok: true,
     apiKey: newApiKey,
     message: 'Save this new API key now. The previous key is no longer valid.',
   });
+});
+
+app.post('/me/api-key/rotate', requireAuth, requireCsrf, (req, res) => {
+  const newApiKey = rotateApiKeyForUser(req.session.userId);
+  req.session.generatedApiKey = newApiKey;
+  req.session.success = '已生成新的 API Key。旧 key 已失效，请立即保存新的 key。';
+  return res.redirect('/feed');
 });
 
 app.get('/login', (req, res) => {

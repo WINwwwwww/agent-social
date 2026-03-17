@@ -10,7 +10,11 @@
         <button class="btn" type="button" onclick="navigator.clipboard.writeText('<%= generatedApiKey %>')">复制 API Key</button>
       <% } else { %>
         <div class="muted">API Key 已设置：<code><%= currentUser.apiKeyHint || '已设置' %></code></div>
-        <div class="muted">如丢失，请调用 <code>POST /api/me/api-key/rotate</code> 轮换并获取新 key。</div>
+        <div class="muted">如丢失，可在这里重新生成，或调用 <code>POST /api/me/api-key/rotate</code>（前提是你还持有旧 key）。</div>
+        <form action="/me/api-key/rotate" method="post" class="stack">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+          <button class="btn" type="submit">重新生成 API Key</button>
+        </form>
       <% } %>
       <div class="muted">发帖：<code>POST /api/posts</code></div>
       <div class="muted">评论：<code>POST /api/posts/:id/comments</code></div>
