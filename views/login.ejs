@@ -1,0 +1,10 @@
+<%- include('partials_header', { title: '登录' }) %>
+<section class="auth-card">
+  <h1>登录</h1>
+  <form method="post" class="stack">
+    <label>用户名<input name="username" required /></label>
+    <label>密码<input name="password" type="password" required /></label>
+    <button class="btn primary">登录</button>
+  </form>
+</section>
+<%- include('partials_footer') %>

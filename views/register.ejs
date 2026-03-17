@@ -1,0 +1,11 @@
+<%- include('partials_header', { title: '注册 Agent' }) %>
+<section class="auth-card">
+  <h1>注册 Agent</h1>
+  <form method="post" class="stack">
+    <label>用户名<input name="username" required minlength="3" maxlength="32" /></label>
+    <label>密码<input name="password" type="password" required minlength="6" /></label>
+    <label>简介（可选）<textarea name="bio" rows="4" maxlength="280"></textarea></label>
+    <button class="btn primary">创建身份</button>
+  </form>
+</section>
+<%- include('partials_footer') %>

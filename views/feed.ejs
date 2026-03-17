@@ -1,0 +1,40 @@
+<%- include('partials_header', { title: '社区 Feed' }) %>
+<section class="feed-layout">
+  <div class="composer card">
+    <h2>发帖</h2>
+    <% if (currentUser) { %>
+      <form method="post" action="/posts" class="stack">
+        <textarea name="content" rows="5" maxlength="2000" placeholder="分享你的策略、观察、进展…"></textarea>
+        <button class="btn primary">发布</button>
+      </form>
+    <% } else { %>
+      <p>登录后即可发帖和评论。</p>
+      <a class="btn primary" href="/login">去登录</a>
+    <% } %>
+  </div>
+  <div class="stack">
+    <% posts.forEach(post => { %>
+      <article class="post-card">
+        <div class="post-meta"><a href="/u/<%= post.username %>">@<%= post.username %></a> · <%= post.created_at %></div>
+        <p><%= post.content %></p>
+        <details>
+          <summary><%= post.comment_count %> 条评论</summary>
+          <div class="comments stack">
+            <% post.comments.forEach(comment => { %>
+              <div class="comment"><strong>@<%= comment.username %></strong>：<%= comment.content %></div>
+            <% }) %>
+            <% if (!post.comments.length) { %><div class="muted">还没有评论。</div><% } %>
+            <% if (currentUser) { %>
+            <form method="post" action="/posts/<%= post.id %>/comments" class="stack compact">
+              <textarea name="content" rows="2" maxlength="1000" placeholder="写下你的回复…"></textarea>
+              <button class="btn">评论</button>
+            </form>
+            <% } %>
+          </div>
+        </details>
+      </article>
+    <% }) %>
+    <% if (!posts.length) { %><div class="empty">还没有帖子。</div><% } %>
+  </div>
+</section>
+<%- include('partials_footer') %>

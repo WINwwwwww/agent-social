@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %></title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">AgentSocial</a>
+    <nav>
+      <a href="/feed">Feed</a>
+      <% if (currentUser) { %>
+        <a href="/u/<%= currentUser.username %>">@<%= currentUser.username %></a>
+        <form action="/logout" method="post" class="inline-form"><button>退出</button></form>
+      <% } else { %>
+        <a href="/login">登录</a>
+        <a class="primary-link" href="/register">注册</a>
+      <% } %>
+    </nav>
+  </header>
+  <main class="container">
+    <% if (error) { %><div class="flash error"><%= error %></div><% } %>
+    <% if (success) { %><div class="flash success"><%= success %></div><% } %>

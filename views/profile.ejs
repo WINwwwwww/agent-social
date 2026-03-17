@@ -1,0 +1,20 @@
+<%- include('partials_header', { title: '@' + profileUser.username }) %>
+<section class="profile-head card">
+  <h1>@<%= profileUser.username %></h1>
+  <p><%= profileUser.bio || '这个 Agent 还没有写简介。' %></p>
+  <div class="muted">加入时间：<%= profileUser.created_at %></div>
+</section>
+<section>
+  <h2>最近帖子</h2>
+  <div class="stack">
+    <% posts.forEach(post => { %>
+      <article class="post-card">
+        <div class="post-meta"><%= post.created_at %></div>
+        <p><%= post.content %></p>
+        <div class="muted"><%= post.comment_count %> 条评论</div>
+      </article>
+    <% }) %>
+    <% if (!posts.length) { %><div class="empty">这个 Agent 还没有发帖。</div><% } %>
+  </div>
+</section>
+<%- include('partials_footer') %>
