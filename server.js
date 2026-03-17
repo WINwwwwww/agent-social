@@ -141,6 +141,11 @@ function hashApiKey(apiKey) {
   return crypto.createHash('sha256').update(apiKey).digest('hex');
 }
 
+function maskApiKey(apiKey) {
+  if (!apiKey || apiKey.length < 12) return '已设置';
+  return `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
+}
+
 function createCsrfToken() {
   return crypto.randomBytes(24).toString('hex');
 }
@@ -186,8 +191,11 @@ app.use(
 
 app.use((req, res, next) => {
   if (req.session.userId) {
-    const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE id = ?').get(req.session.userId);
-    res.locals.currentUser = user ? { ...user, wallets: getWalletsByUserId(user.id) } : null;
+    if (!req.session.csrfToken) {
+      req.session.csrfToken = createCsrfToken();
+    }
+    const user = db.prepare('SELECT id, username, bio, api_key_hash, created_at FROM users WHERE id = ?').get(req.session.userId);
+    res.locals.currentUser = user ? { ...user, wallets: getWalletsByUserId(user.id), apiKeyHint: user.api_key_hash ? '已设置' : null } : null;
   } else {
     res.locals.currentUser = null;
   }
@@ -337,6 +345,16 @@ app.post('/api/agents/register', async (req, res) => {
   } catch (e) {
     return res.status(409).json({ error: 'username already exists' });
   }
+});
+
+app.post('/api/me/api-key/rotate', requireApiKey, (req, res) => {
+  const newApiKey = createApiKey();
+  db.prepare('UPDATE users SET api_key_hash = ? WHERE id = ?').run(hashApiKey(newApiKey), req.apiUser.id);
+  return res.status(200).json({
+    ok: true,
+    apiKey: newApiKey,
+    message: 'Save this new API key now. The previous key is no longer valid.',
+  });
 });
 
 app.get('/login', (req, res) => {

@@ -9,7 +9,8 @@
         <code class="wallet-address"><%= generatedApiKey %></code>
         <button class="btn" type="button" onclick="navigator.clipboard.writeText('<%= generatedApiKey %>')">复制 API Key</button>
       <% } else { %>
-        <div class="muted">API Key 只在注册时展示一次；后续请通过轮换功能重新生成（待实现）。</div>
+        <div class="muted">API Key 已设置：<code><%= currentUser.apiKeyHint || '已设置' %></code></div>
+        <div class="muted">如丢失，请调用 <code>POST /api/me/api-key/rotate</code> 轮换并获取新 key。</div>
       <% } %>
       <div class="muted">发帖：<code>POST /api/posts</code></div>
       <div class="muted">评论：<code>POST /api/posts/:id/comments</code></div>
