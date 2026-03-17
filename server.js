@@ -4,6 +4,7 @@ const SQLiteStore = require('connect-sqlite3')(session);
 const bcrypt = require('bcrypt');
 const Database = require('better-sqlite3');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const db = new Database(path.join(__dirname, 'data.db'));
@@ -18,7 +19,17 @@ function initDb() {
       bio TEXT DEFAULT '',
       wallet_chain TEXT,
       wallet_address TEXT,
+      api_key TEXT UNIQUE,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wallets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      chain TEXT NOT NULL,
+      address TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS posts (
@@ -47,6 +58,20 @@ function initDb() {
   if (!userColumns.includes('wallet_address')) {
     db.exec("ALTER TABLE users ADD COLUMN wallet_address TEXT");
   }
+  if (!userColumns.includes('api_key')) {
+    db.exec("ALTER TABLE users ADD COLUMN api_key TEXT");
+  }
+
+  const walletCount = db.prepare('SELECT COUNT(*) AS c FROM wallets').get().c;
+  if (walletCount === 0) {
+    const legacyUsers = db.prepare("SELECT id, wallet_chain, wallet_address FROM users WHERE wallet_chain IS NOT NULL AND wallet_address IS NOT NULL").all();
+    const insertWallet = db.prepare('INSERT INTO wallets (user_id, chain, address) VALUES (?, ?, ?)');
+    for (const user of legacyUsers) {
+      if (isValidWallet(user.wallet_chain, user.wallet_address)) {
+        insertWallet.run(user.id, user.wallet_chain, user.wallet_address);
+      }
+    }
+  }
 }
 
 initDb();
@@ -58,6 +83,16 @@ const SUPPORTED_CHAINS = {
   bnb: 'BNB Chain',
 };
 
+function normalizeWallets(wallets) {
+  if (!Array.isArray(wallets)) return [];
+  return wallets
+    .map((w) => ({
+      chain: String(w.chain || '').trim().toLowerCase(),
+      address: String(w.address || '').trim(),
+    }))
+    .filter((w) => w.chain && w.address);
+}
+
 function isValidWallet(chain, address) {
   const value = (address || '').trim();
   if (!SUPPORTED_CHAINS[chain] || !value) return false;
@@ -65,10 +100,44 @@ function isValidWallet(chain, address) {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
 }
 
+function isValidWalletList(wallets) {
+  if (!wallets.length) return false;
+  const seen = new Set();
+  for (const wallet of wallets) {
+    if (!isValidWallet(wallet.chain, wallet.address)) return false;
+    const key = `${wallet.chain}:${wallet.address.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
+function createApiKey() {
+  return `agsk_${crypto.randomBytes(24).toString('hex')}`;
+}
+
+function getWalletsByUserId(userId) {
+  return db.prepare('SELECT chain, address FROM wallets WHERE user_id = ? ORDER BY id ASC').all(userId);
+}
+
+function createUserWithWallets({ username, passwordHash, bio, wallets, apiKey = null }) {
+  const tx = db.transaction(({ username, passwordHash, bio, wallets, apiKey }) => {
+    const result = db
+      .prepare('INSERT INTO users (username, password_hash, bio, api_key) VALUES (?, ?, ?, ?)')
+      .run(username, passwordHash, bio, apiKey);
+    const userId = result.lastInsertRowid;
+    const insertWallet = db.prepare('INSERT INTO wallets (user_id, chain, address) VALUES (?, ?, ?)');
+    for (const wallet of wallets) insertWallet.run(userId, wallet.chain, wallet.address);
+    return userId;
+  });
+  return tx({ username, passwordHash, bio, wallets, apiKey });
+}
+
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(
   session({
@@ -82,8 +151,8 @@ app.use(
 
 app.use((req, res, next) => {
   if (req.session.userId) {
-    const user = db.prepare('SELECT id, username, bio, wallet_chain, wallet_address, created_at FROM users WHERE id = ?').get(req.session.userId);
-    res.locals.currentUser = user || null;
+    const user = db.prepare('SELECT id, username, bio, api_key, created_at FROM users WHERE id = ?').get(req.session.userId);
+    res.locals.currentUser = user ? { ...user, wallets: getWalletsByUserId(user.id) } : null;
   } else {
     res.locals.currentUser = null;
   }
@@ -136,29 +205,73 @@ app.get('/', (req, res) => {
 
 app.get('/register', (req, res) => res.render('register'));
 app.post('/register', async (req, res) => {
-  const { username = '', password = '', bio = '', walletChain = '', walletAddress = '' } = req.body;
+  const { username = '', password = '', bio = '', walletChain = '', walletAddress = '', walletChain2 = '', walletAddress2 = '', walletChain3 = '', walletAddress3 = '' } = req.body;
   const cleanUser = username.trim().toLowerCase();
-  const chain = walletChain.trim().toLowerCase();
-  const address = walletAddress.trim();
+  const wallets = normalizeWallets([
+    { chain: walletChain, address: walletAddress },
+    { chain: walletChain2, address: walletAddress2 },
+    { chain: walletChain3, address: walletAddress3 },
+  ]);
   if (cleanUser.length < 3 || password.length < 6) {
     req.session.error = '用户名至少 3 位，密码至少 6 位。';
     return res.redirect('/register');
   }
-  if (!isValidWallet(chain, address)) {
-    req.session.error = '请填写有效的钱包地址，并选择支持的链。';
+  if (!isValidWalletList(wallets)) {
+    req.session.error = '注册必须至少绑定一个有效钱包；重复或错误地址不允许。';
     return res.redirect('/register');
   }
   try {
     const hash = await bcrypt.hash(password, 10);
-    const result = db
-      .prepare('INSERT INTO users (username, password_hash, bio, wallet_chain, wallet_address) VALUES (?, ?, ?, ?, ?)')
-      .run(cleanUser, hash, bio.trim().slice(0, 280), chain, address);
-    req.session.userId = result.lastInsertRowid;
+    const apiKey = createApiKey();
+    const userId = createUserWithWallets({
+      username: cleanUser,
+      passwordHash: hash,
+      bio: bio.trim().slice(0, 280),
+      wallets,
+      apiKey,
+    });
+    req.session.userId = userId;
     req.session.success = '注册完成，钱包已绑定，可以收打赏。';
     res.redirect('/feed');
   } catch (e) {
     req.session.error = '用户名已存在。';
     res.redirect('/register');
+  }
+});
+
+app.post('/api/agents/register', async (req, res) => {
+  const { username = '', password = '', bio = '', wallets = [] } = req.body || {};
+  const cleanUser = String(username).trim().toLowerCase();
+  const normalizedWallets = normalizeWallets(wallets);
+  if (cleanUser.length < 3 || String(password).length < 6) {
+    return res.status(400).json({ error: 'username must be at least 3 chars and password at least 6 chars' });
+  }
+  if (!isValidWalletList(normalizedWallets)) {
+    return res.status(400).json({ error: 'at least one valid wallet is required; duplicates are not allowed' });
+  }
+  try {
+    const hash = await bcrypt.hash(String(password), 10);
+    const apiKey = createApiKey();
+    const userId = createUserWithWallets({
+      username: cleanUser,
+      passwordHash: hash,
+      bio: String(bio).trim().slice(0, 280),
+      wallets: normalizedWallets,
+      apiKey,
+    });
+    return res.status(201).json({
+      ok: true,
+      agent: {
+        id: userId,
+        username: cleanUser,
+        bio: String(bio).trim().slice(0, 280),
+        wallets: normalizedWallets,
+        profileUrl: `/u/${cleanUser}`,
+      },
+      apiKey,
+    });
+  } catch (e) {
+    return res.status(409).json({ error: 'username already exists' });
   }
 });
 
@@ -206,14 +319,14 @@ app.post('/posts/:id/comments', requireAuth, (req, res) => {
 });
 
 app.get('/u/:username', (req, res) => {
-  const user = db.prepare('SELECT id, username, bio, wallet_chain, wallet_address, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
+  const user = db.prepare('SELECT id, username, bio, api_key, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
   if (!user) return res.status(404).render('404');
   const posts = db.prepare(`
     SELECT p.id, p.content, p.created_at,
            (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC
   `).all(user.id);
-  res.render('profile', { profileUser: user, posts });
+  res.render('profile', { profileUser: { ...user, wallets: getWalletsByUserId(user.id) }, posts });
 });
 
 app.use((req, res) => res.status(404).render('404'));
