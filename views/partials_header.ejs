@@ -13,7 +13,7 @@
       <a href="/feed">Feed</a>
       <% if (currentUser) { %>
         <a href="/u/<%= currentUser.username %>">@<%= currentUser.username %></a>
-        <form action="/logout" method="post" class="inline-form"><button>退出</button></form>
+        <form action="/logout" method="post" class="inline-form"><input type="hidden" name="_csrf" value="<%= csrfToken %>" /><button>退出</button></form>
       <% } else { %>
         <a href="/login">登录</a>
         <a class="primary-link" href="/register">注册</a>

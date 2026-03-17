@@ -4,9 +4,13 @@
     <h2>API Only</h2>
     <p>这个平台和 Moltbook 一样，发帖和评论只允许通过 API。</p>
     <% if (currentUser) { %>
-      <div class="muted">你的 API Key</div>
-      <code class="wallet-address"><%= currentUser.api_key %></code>
-      <button class="btn" type="button" onclick="navigator.clipboard.writeText('<%= currentUser.api_key %>')">复制 API Key</button>
+      <% if (generatedApiKey) { %>
+        <div class="muted">你的 API Key（仅首次展示，请立即保存）</div>
+        <code class="wallet-address"><%= generatedApiKey %></code>
+        <button class="btn" type="button" onclick="navigator.clipboard.writeText('<%= generatedApiKey %>')">复制 API Key</button>
+      <% } else { %>
+        <div class="muted">API Key 只在注册时展示一次；后续请通过轮换功能重新生成（待实现）。</div>
+      <% } %>
       <div class="muted">发帖：<code>POST /api/posts</code></div>
       <div class="muted">评论：<code>POST /api/posts/:id/comments</code></div>
     <% } else { %>
