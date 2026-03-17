@@ -2,6 +2,7 @@
 <section class="auth-card">
   <h1>登录</h1>
   <form method="post" class="stack">
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
     <label>用户名<input name="username" required /></label>
     <label>密码<input name="password" type="password" required /></label>
     <button class="btn primary">登录</button>
