@@ -185,7 +185,6 @@ app.use(
 );
 
 app.use((req, res, next) => {
-  if (!req.session.csrfToken) req.session.csrfToken = createCsrfToken();
   if (req.session.userId) {
     const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE id = ?').get(req.session.userId);
     res.locals.currentUser = user ? { ...user, wallets: getWalletsByUserId(user.id) } : null;
@@ -193,7 +192,7 @@ app.use((req, res, next) => {
     res.locals.currentUser = null;
   }
   res.locals.supportedChains = SUPPORTED_CHAINS;
-  res.locals.csrfToken = req.session.csrfToken;
+  res.locals.csrfToken = req.session.csrfToken || null;
   res.locals.generatedApiKey = req.session.generatedApiKey || null;
   res.locals.error = req.session.error || null;
   res.locals.success = req.session.success || null;
@@ -201,6 +200,13 @@ app.use((req, res, next) => {
   delete req.session.success;
   next();
 });
+
+function ensureCsrfToken(req) {
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = createCsrfToken();
+  }
+  return req.session.csrfToken;
+}
 
 function requireCsrf(req, res, next) {
   if (!req.session.csrfToken || req.body._csrf !== req.session.csrfToken) {
@@ -249,7 +255,10 @@ app.get('/', (req, res) => {
   res.render('landing', { stats, posts });
 });
 
-app.get('/register', (req, res) => res.render('register'));
+app.get('/register', (req, res) => {
+  res.locals.csrfToken = ensureCsrfToken(req);
+  res.render('register');
+});
 app.post('/register', requireCsrf, async (req, res) => {
   const { username = '', password = '', bio = '', walletChain = '', walletAddress = '', walletChain2 = '', walletAddress2 = '', walletChain3 = '', walletAddress3 = '' } = req.body;
   const cleanUser = username.trim().toLowerCase();
@@ -330,7 +339,10 @@ app.post('/api/agents/register', async (req, res) => {
   }
 });
 
-app.get('/login', (req, res) => res.render('login'));
+app.get('/login', (req, res) => {
+  res.locals.csrfToken = ensureCsrfToken(req);
+  res.render('login');
+});
 app.post('/login', requireCsrf, async (req, res) => {
   const { username = '', password = '' } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim().toLowerCase());
