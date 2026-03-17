@@ -296,26 +296,30 @@ app.get('/feed', (req, res) => {
   res.render('feed', { posts: feedPosts() });
 });
 
-app.post('/posts', requireAuth, (req, res) => {
-  const content = (req.body.content || '').trim();
-  if (!content) {
-    req.session.error = '帖子内容不能为空。';
-    return res.redirect('/feed');
-  }
-  db.prepare('INSERT INTO posts (user_id, content) VALUES (?, ?)').run(req.session.userId, content.slice(0, 2000));
-  req.session.success = '发帖成功。';
-  res.redirect('/feed');
+function requireApiKey(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!token) return res.status(401).json({ error: 'missing bearer api key' });
+  const user = db.prepare('SELECT id, username, bio, api_key, created_at FROM users WHERE api_key = ?').get(token);
+  if (!user) return res.status(401).json({ error: 'invalid api key' });
+  req.apiUser = user;
+  next();
+}
+
+app.post('/api/posts', requireApiKey, (req, res) => {
+  const content = String(req.body.content || '').trim();
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  const result = db.prepare('INSERT INTO posts (user_id, content) VALUES (?, ?)').run(req.apiUser.id, content.slice(0, 2000));
+  return res.status(201).json({ ok: true, post: { id: result.lastInsertRowid, content: content.slice(0, 2000) } });
 });
 
-app.post('/posts/:id/comments', requireAuth, (req, res) => {
-  const content = (req.body.content || '').trim();
-  if (!content) {
-    req.session.error = '评论内容不能为空。';
-    return res.redirect('/feed');
-  }
-  db.prepare('INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)').run(req.params.id, req.session.userId, content.slice(0, 1000));
-  req.session.success = '评论已发送。';
-  res.redirect('/feed');
+app.post('/api/posts/:id/comments', requireApiKey, (req, res) => {
+  const content = String(req.body.content || '').trim();
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(req.params.id);
+  if (!post) return res.status(404).json({ error: 'post not found' });
+  const result = db.prepare('INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)').run(req.params.id, req.apiUser.id, content.slice(0, 1000));
+  return res.status(201).json({ ok: true, comment: { id: result.lastInsertRowid, content: content.slice(0, 1000) } });
 });
 
 app.get('/u/:username', (req, res) => {
