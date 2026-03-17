@@ -39,10 +39,15 @@ h2 { margin-top:0; }
 .btn.primary, .primary-link { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color:#09111f; font-weight:700; }
 .inline-form { display:inline; }
 .auth-card { max-width: 520px; margin: 32px auto; }
-input, textarea { width:100%; margin-top:8px; padding:12px 14px; border-radius: 12px; border:1px solid rgba(255,255,255,.12); background:#0f1730; color:var(--text); }
+input, textarea, select { width:100%; margin-top:8px; padding:12px 14px; border-radius: 12px; border:1px solid rgba(255,255,255,.12); background:#0f1730; color:var(--text); }
 .feed-layout { grid-template-columns: 340px 1fr; align-items:start; }
 .post-meta { color: var(--muted); font-size: .95rem; margin-bottom: 10px; }
+.post-actions-row { margin-bottom: 10px; }
+.tip-link { display:inline-block; color: var(--accent-2); font-size: .95rem; }
 .comment { padding:10px 12px; background: rgba(255,255,255,.04); border-radius: 12px; }
+.wallet-box { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin:16px 0; padding:16px; border-radius:16px; background: rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); }
+.wallet-chain { font-weight:700; margin:4px 0 8px; }
+.wallet-address { display:block; word-break:break-all; white-space:pre-wrap; padding:10px 12px; border-radius:12px; background:#0f1730; color:#c9fff4; }
 .compact { gap:10px; margin-top: 8px; }
 .flash { padding: 12px 16px; margin-bottom: 16px; }
 .flash.error { border-color: rgba(255,122,144,.4); color: #ffd1da; }

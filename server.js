@@ -16,6 +16,8 @@ function initDb() {
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       bio TEXT DEFAULT '',
+      wallet_chain TEXT,
+      wallet_address TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -37,9 +39,32 @@ function initDb() {
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
   `);
+
+  const userColumns = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  if (!userColumns.includes('wallet_chain')) {
+    db.exec("ALTER TABLE users ADD COLUMN wallet_chain TEXT");
+  }
+  if (!userColumns.includes('wallet_address')) {
+    db.exec("ALTER TABLE users ADD COLUMN wallet_address TEXT");
+  }
 }
 
 initDb();
+
+const SUPPORTED_CHAINS = {
+  solana: 'Solana',
+  base: 'Base',
+  ethereum: 'Ethereum',
+  bnb: 'BNB Chain',
+};
+
+function isValidWallet(chain, address) {
+  const value = (address || '').trim();
+  if (!SUPPORTED_CHAINS[chain] || !value) return false;
+  if (chain === 'solana') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -57,11 +82,12 @@ app.use(
 
 app.use((req, res, next) => {
   if (req.session.userId) {
-    const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT id, username, bio, wallet_chain, wallet_address, created_at FROM users WHERE id = ?').get(req.session.userId);
     res.locals.currentUser = user || null;
   } else {
     res.locals.currentUser = null;
   }
+  res.locals.supportedChains = SUPPORTED_CHAINS;
   res.locals.error = req.session.error || null;
   res.locals.success = req.session.success || null;
   delete req.session.error;
@@ -110,19 +136,25 @@ app.get('/', (req, res) => {
 
 app.get('/register', (req, res) => res.render('register'));
 app.post('/register', async (req, res) => {
-  const { username = '', password = '', bio = '' } = req.body;
+  const { username = '', password = '', bio = '', walletChain = '', walletAddress = '' } = req.body;
   const cleanUser = username.trim().toLowerCase();
+  const chain = walletChain.trim().toLowerCase();
+  const address = walletAddress.trim();
   if (cleanUser.length < 3 || password.length < 6) {
     req.session.error = '用户名至少 3 位，密码至少 6 位。';
+    return res.redirect('/register');
+  }
+  if (!isValidWallet(chain, address)) {
+    req.session.error = '请填写有效的钱包地址，并选择支持的链。';
     return res.redirect('/register');
   }
   try {
     const hash = await bcrypt.hash(password, 10);
     const result = db
-      .prepare('INSERT INTO users (username, password_hash, bio) VALUES (?, ?, ?)')
-      .run(cleanUser, hash, bio.trim().slice(0, 280));
+      .prepare('INSERT INTO users (username, password_hash, bio, wallet_chain, wallet_address) VALUES (?, ?, ?, ?, ?)')
+      .run(cleanUser, hash, bio.trim().slice(0, 280), chain, address);
     req.session.userId = result.lastInsertRowid;
-    req.session.success = '注册完成，欢迎加入。';
+    req.session.success = '注册完成，钱包已绑定，可以收打赏。';
     res.redirect('/feed');
   } catch (e) {
     req.session.error = '用户名已存在。';
@@ -174,7 +206,7 @@ app.post('/posts/:id/comments', requireAuth, (req, res) => {
 });
 
 app.get('/u/:username', (req, res) => {
-  const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
+  const user = db.prepare('SELECT id, username, bio, wallet_chain, wallet_address, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
   if (!user) return res.status(404).render('404');
   const posts = db.prepare(`
     SELECT p.id, p.content, p.created_at,

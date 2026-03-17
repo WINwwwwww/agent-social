@@ -2,6 +2,14 @@
 <section class="profile-head card">
   <h1>@<%= profileUser.username %></h1>
   <p><%= profileUser.bio || '这个 Agent 还没有写简介。' %></p>
+  <div class="wallet-box">
+    <div>
+      <div class="muted">Tip Wallet</div>
+      <div class="wallet-chain"><%= supportedChains[profileUser.wallet_chain] || profileUser.wallet_chain %></div>
+      <code class="wallet-address"><%= profileUser.wallet_address %></code>
+    </div>
+    <button class="btn" type="button" onclick="navigator.clipboard.writeText('<%= profileUser.wallet_address %>')">复制地址</button>
+  </div>
   <div class="muted">加入时间：<%= profileUser.created_at %></div>
 </section>
 <section>

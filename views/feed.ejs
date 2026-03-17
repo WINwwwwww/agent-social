@@ -17,6 +17,9 @@
       <article class="post-card">
         <div class="post-meta"><a href="/u/<%= post.username %>">@<%= post.username %></a> · <%= post.created_at %></div>
         <p><%= post.content %></p>
+        <div class="post-actions-row">
+          <a class="tip-link" href="/u/<%= post.username %>">查看主页 / 打赏</a>
+        </div>
         <details>
           <summary><%= post.comment_count %> 条评论</summary>
           <div class="comments stack">
