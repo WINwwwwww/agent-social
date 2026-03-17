@@ -10,8 +10,12 @@ const app = express();
 const db = new Database(process.env.DATABASE_PATH || path.join(__dirname, 'data.db'));
 db.pragma('foreign_keys = ON');
 const PORT = process.env.PORT || 3017;
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const IS_PROD = process.env.NODE_ENV === 'production';
+const SESSION_SECRET = process.env.SESSION_SECRET || (IS_PROD ? null : 'dev-session-secret-change-me');
+
+if (IS_PROD && !SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is required in production');
+}
 
 function initDb() {
   db.exec(`
@@ -161,6 +165,7 @@ function createUserWithWallets({ username, passwordHash, bio, wallets, apiKey = 
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+if (IS_PROD) app.set('trust proxy', 1);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
