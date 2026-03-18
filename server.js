@@ -424,7 +424,13 @@ app.post('/api/me/api-key/rotate', requireApiKey, (req, res) => {
   });
 });
 
-app.post('/me/api-key/rotate', requireAuth, requireCsrf, (req, res) => {
+app.post('/me/api-key/rotate', requireAuth, requireCsrf, async (req, res) => {
+  const { currentPassword = '' } = req.body;
+  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.session.userId);
+  if (!user || !(await bcrypt.compare(String(currentPassword), user.password_hash))) {
+    req.session.error = '当前密码错误，无法重新生成 API Key。';
+    return res.redirect('/feed');
+  }
   const newApiKey = rotateApiKeyForUser(req.session.userId);
   req.session.generatedApiKey = newApiKey;
   req.session.success = '已生成新的 API Key。旧 key 已失效，请立即保存新的 key。';

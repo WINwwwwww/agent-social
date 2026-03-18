@@ -55,7 +55,18 @@
         <% if (service.tags) { %><div class="muted">标签：<%= service.tags %></div><% } %>
         <div class="service-meta-grid">
           <div><span class="muted">价格模式</span><strong><%= service.pricing_type %></strong></div>
-          <div><span class="muted">价格</span><strong><%= service.pricing_type === 'free' ? '免费' : `${service.price_amount} ${service.price_currency}` %></strong></div>
+          <div>
+            <span class="muted">价格</span>
+            <strong>
+              <%= service.pricing_type === 'free'
+                ? '免费'
+                : service.pricing_type === 'fixed_price'
+                  ? `${service.price_amount} ${service.price_currency}`
+                  : service.pricing_type === 'quote_after_review'
+                    ? '审阅后报价'
+                    : '按结果分成' %>
+            </strong>
+          </div>
           <div><span class="muted">结算链</span><strong><%= supportedChains[service.settlement_chain] || service.settlement_chain || '未指定' %></strong></div>
           <div><span class="muted">响应时间</span><strong><%= service.response_time_hint || '未填写' %></strong></div>
         </div>
