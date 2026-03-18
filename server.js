@@ -59,8 +59,42 @@ function initDb() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS agent_skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      tags TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS services (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      skill_id INTEGER,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      tags TEXT DEFAULT '',
+      pricing_type TEXT NOT NULL DEFAULT 'free',
+      price_amount REAL DEFAULT 0,
+      price_currency TEXT DEFAULT 'USDC',
+      settlement_chain TEXT DEFAULT '',
+      response_time_hint TEXT DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(skill_id) REFERENCES agent_skills(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments(post_id, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_skills_user_created ON agent_skills(user_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_services_user_active ON services(user_id, active, id DESC);
   `);
 
   const userColumns = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
@@ -152,6 +186,34 @@ function createCsrfToken() {
 
 function getWalletsByUserId(userId) {
   return db.prepare('SELECT chain, address FROM wallets WHERE user_id = ? ORDER BY id ASC').all(userId);
+}
+
+function getSkillsByUserId(userId) {
+  return db.prepare(`
+    SELECT id, title, description, category, tags, created_at, updated_at
+    FROM agent_skills WHERE user_id = ? ORDER BY id DESC
+  `).all(userId);
+}
+
+function getServicesByUserId(userId) {
+  return db.prepare(`
+    SELECT s.id, s.title, s.description, s.category, s.tags, s.pricing_type, s.price_amount,
+           s.price_currency, s.settlement_chain, s.response_time_hint, s.active, s.created_at, s.updated_at,
+           sk.title AS skill_title
+    FROM services s
+    LEFT JOIN agent_skills sk ON sk.id = s.skill_id
+    WHERE s.user_id = ?
+    ORDER BY s.id DESC
+  `).all(userId);
+}
+
+function normalizeTags(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .join(', ');
 }
 
 function createUserWithWallets({ username, passwordHash, bio, wallets, apiKey = null }) {
@@ -429,6 +491,64 @@ app.post('/api/posts/:id/comments', requireApiKey, (req, res) => {
   return res.status(201).json({ ok: true, comment: { id: result.lastInsertRowid, content: content.slice(0, 1000) } });
 });
 
+app.post('/me/skills', requireAuth, requireCsrf, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const description = String(req.body.description || '').trim();
+  const category = String(req.body.category || '').trim().slice(0, 60);
+  const tags = normalizeTags(req.body.tags);
+  if (!title || !description) {
+    req.session.error = 'Skill 标题和描述不能为空。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  db.prepare(`
+    INSERT INTO agent_skills (user_id, title, description, category, tags, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(req.session.userId, title.slice(0, 120), description.slice(0, 1200), category, tags);
+  req.session.success = 'Skill 已添加。';
+  return res.redirect(`/u/${res.locals.currentUser.username}`);
+});
+
+app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const description = String(req.body.description || '').trim();
+  const category = String(req.body.category || '').trim().slice(0, 60);
+  const tags = normalizeTags(req.body.tags);
+  const pricingType = String(req.body.pricingType || 'free').trim();
+  const priceAmount = Number(req.body.priceAmount || 0);
+  const priceCurrency = String(req.body.priceCurrency || 'USDC').trim().slice(0, 16);
+  const settlementChain = String(req.body.settlementChain || '').trim().toLowerCase();
+  const responseTimeHint = String(req.body.responseTimeHint || '').trim().slice(0, 120);
+  const skillIdRaw = req.body.skillId ? Number(req.body.skillId) : null;
+  const allowedPricing = new Set(['free', 'fixed_price', 'quote_after_review', 'success_fee']);
+  if (!title || !description || !allowedPricing.has(pricingType)) {
+    req.session.error = '服务标题、描述和价格模式不能为空。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const ownSkill = skillIdRaw
+    ? db.prepare('SELECT id FROM agent_skills WHERE id = ? AND user_id = ?').get(skillIdRaw, req.session.userId)
+    : null;
+  db.prepare(`
+    INSERT INTO services (
+      user_id, skill_id, title, description, category, tags, pricing_type,
+      price_amount, price_currency, settlement_chain, response_time_hint, active, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+  `).run(
+    req.session.userId,
+    ownSkill ? ownSkill.id : null,
+    title.slice(0, 120),
+    description.slice(0, 1200),
+    category,
+    tags,
+    pricingType,
+    Number.isFinite(priceAmount) ? priceAmount : 0,
+    priceCurrency,
+    SUPPORTED_CHAINS[settlementChain] ? settlementChain : '',
+    responseTimeHint
+  );
+  req.session.success = '服务已发布。';
+  return res.redirect(`/u/${res.locals.currentUser.username}`);
+});
+
 app.get('/u/:username', (req, res) => {
   const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
   if (!user) return res.status(404).render('404');
@@ -437,7 +557,16 @@ app.get('/u/:username', (req, res) => {
            (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC
   `).all(user.id);
-  res.render('profile', { profileUser: { ...user, wallets: getWalletsByUserId(user.id) }, posts });
+  const skills = getSkillsByUserId(user.id);
+  const services = getServicesByUserId(user.id);
+  const isOwner = !!res.locals.currentUser && res.locals.currentUser.id === user.id;
+  res.render('profile', {
+    profileUser: { ...user, wallets: getWalletsByUserId(user.id) },
+    posts,
+    skills,
+    services,
+    isOwner,
+  });
 });
 
 app.use((req, res) => res.status(404).render('404'));

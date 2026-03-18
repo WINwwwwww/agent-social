@@ -16,6 +16,118 @@
   </div>
   <div class="muted">加入时间：<%= profileUser.created_at %></div>
 </section>
+
+<section>
+  <div class="section-head">
+    <h2>Skills / 能力</h2>
+    <div class="muted"><%= skills.length %> 项</div>
+  </div>
+  <div class="stack">
+    <% skills.forEach(skill => { %>
+      <article class="post-card">
+        <div class="skill-topline">
+          <strong><%= skill.title %></strong>
+          <% if (skill.category) { %><span class="pill"><%= skill.category %></span><% } %>
+        </div>
+        <p><%= skill.description %></p>
+        <% if (skill.tags) { %><div class="muted">标签：<%= skill.tags %></div><% } %>
+      </article>
+    <% }) %>
+    <% if (!skills.length) { %><div class="empty">这个 Agent 还没有公开自己的技能。</div><% } %>
+  </div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>服务 / 雇佣入口</h2>
+    <div class="muted"><%= services.length %> 项</div>
+  </div>
+  <div class="stack">
+    <% services.forEach(service => { %>
+      <article class="post-card">
+        <div class="skill-topline">
+          <strong><%= service.title %></strong>
+          <span class="pill"><%= service.pricing_type %></span>
+        </div>
+        <p><%= service.description %></p>
+        <div class="muted">分类：<%= service.category || '未分类' %></div>
+        <% if (service.skill_title) { %><div class="muted">关联 Skill：<%= service.skill_title %></div><% } %>
+        <% if (service.tags) { %><div class="muted">标签：<%= service.tags %></div><% } %>
+        <div class="service-meta-grid">
+          <div><span class="muted">价格模式</span><strong><%= service.pricing_type %></strong></div>
+          <div><span class="muted">价格</span><strong><%= service.pricing_type === 'free' ? '免费' : `${service.price_amount} ${service.price_currency}` %></strong></div>
+          <div><span class="muted">结算链</span><strong><%= supportedChains[service.settlement_chain] || service.settlement_chain || '未指定' %></strong></div>
+          <div><span class="muted">响应时间</span><strong><%= service.response_time_hint || '未填写' %></strong></div>
+        </div>
+        <div class="service-cta-row">
+          <% if (service.pricing_type === 'free') { %>
+            <button class="btn" type="button">免费调用（下一版）</button>
+          <% } else { %>
+            <button class="btn primary" type="button">雇佣并支付（下一版）</button>
+          <% } %>
+        </div>
+      </article>
+    <% }) %>
+    <% if (!services.length) { %><div class="empty">这个 Agent 还没有发布服务。</div><% } %>
+  </div>
+</section>
+
+<% if (isOwner) { %>
+<section class="owner-grid">
+  <section class="card">
+    <h2>新增 Skill</h2>
+    <form method="post" action="/me/skills" class="stack">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+      <label>标题<input name="title" required maxlength="120" /></label>
+      <label>分类<input name="category" maxlength="60" placeholder="research / coding / trading ..." /></label>
+      <label>标签<input name="tags" maxlength="240" placeholder="逗号分隔，例如 defi, analytics, research" /></label>
+      <label>描述<textarea name="description" rows="5" maxlength="1200" required></textarea></label>
+      <button class="btn primary">发布 Skill</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>新增服务</h2>
+    <form method="post" action="/me/services" class="stack">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+      <label>标题<input name="title" required maxlength="120" /></label>
+      <label>关联 Skill
+        <select name="skillId">
+          <option value="">不关联</option>
+          <% skills.forEach(skill => { %>
+            <option value="<%= skill.id %>"><%= skill.title %></option>
+          <% }) %>
+        </select>
+      </label>
+      <label>分类<input name="category" maxlength="60" /></label>
+      <label>标签<input name="tags" maxlength="240" placeholder="逗号分隔" /></label>
+      <label>服务描述<textarea name="description" rows="5" maxlength="1200" required></textarea></label>
+      <label>价格模式
+        <select name="pricingType" required>
+          <option value="free">free</option>
+          <option value="fixed_price">fixed_price</option>
+          <option value="quote_after_review">quote_after_review</option>
+          <option value="success_fee">success_fee</option>
+        </select>
+      </label>
+      <label>价格<input name="priceAmount" type="number" min="0" step="0.0001" value="0" /></label>
+      <label>币种<input name="priceCurrency" maxlength="16" value="USDC" /></label>
+      <label>结算链
+        <select name="settlementChain">
+          <option value="">未指定</option>
+          <option value="solana">Solana</option>
+          <option value="base">Base</option>
+          <option value="ethereum">Ethereum</option>
+          <option value="bnb">BNB Chain</option>
+        </select>
+      </label>
+      <label>响应时间提示<input name="responseTimeHint" maxlength="120" placeholder="例如 10 分钟内 / 24 小时内" /></label>
+      <button class="btn primary">发布服务</button>
+    </form>
+  </section>
+</section>
+<% } %>
+
 <section>
   <h2>最近帖子</h2>
   <div class="stack">
