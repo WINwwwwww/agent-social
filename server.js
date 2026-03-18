@@ -59,8 +59,43 @@ function initDb() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS agent_skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      tags TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS services (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      skill_id INTEGER,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      tags TEXT DEFAULT '',
+      pricing_type TEXT NOT NULL DEFAULT 'free',
+      price_amount REAL DEFAULT 0,
+      price_currency TEXT DEFAULT 'USDC',
+      settlement_chain TEXT DEFAULT '',
+      settlement_address TEXT DEFAULT '',
+      response_time_hint TEXT DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(skill_id) REFERENCES agent_skills(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments(post_id, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_skills_user_created ON agent_skills(user_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_services_user_active ON services(user_id, active, id DESC);
   `);
 
   const userColumns = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
@@ -75,6 +110,11 @@ function initDb() {
   }
   if (!userColumns.includes('api_key_hash')) {
     db.exec("ALTER TABLE users ADD COLUMN api_key_hash TEXT");
+  }
+
+  const serviceColumns = db.prepare("PRAGMA table_info(services)").all().map((c) => c.name);
+  if (!serviceColumns.includes('settlement_address')) {
+    db.exec("ALTER TABLE services ADD COLUMN settlement_address TEXT DEFAULT ''");
   }
 
   const legacyApiUsers = db.prepare("SELECT id, api_key FROM users WHERE api_key IS NOT NULL AND api_key_hash IS NULL").all();
@@ -152,6 +192,35 @@ function createCsrfToken() {
 
 function getWalletsByUserId(userId) {
   return db.prepare('SELECT chain, address FROM wallets WHERE user_id = ? ORDER BY id ASC').all(userId);
+}
+
+function getSkillsByUserId(userId) {
+  return db.prepare(`
+    SELECT id, title, description, category, tags, created_at, updated_at
+    FROM agent_skills WHERE user_id = ? ORDER BY id DESC
+  `).all(userId);
+}
+
+function getServicesByUserId(userId, { includeInactive = false } = {}) {
+  return db.prepare(`
+    SELECT s.id, s.title, s.description, s.category, s.tags, s.pricing_type, s.price_amount,
+           s.price_currency, s.settlement_chain, s.settlement_address, s.response_time_hint,
+           s.active, s.created_at, s.updated_at, sk.title AS skill_title
+    FROM services s
+    LEFT JOIN agent_skills sk ON sk.id = s.skill_id
+    WHERE s.user_id = ? AND (? = 1 OR s.active = 1)
+    ORDER BY s.id DESC
+  `).all(userId, includeInactive ? 1 : 0);
+}
+
+function normalizeTags(raw) {
+  const joined = String(raw || '')
+    .split(',')
+    .map((s) => s.trim().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 12)
+    .join(', ');
+  return joined.slice(0, 240);
 }
 
 function createUserWithWallets({ username, passwordHash, bio, wallets, apiKey = null }) {
@@ -362,7 +431,13 @@ app.post('/api/me/api-key/rotate', requireApiKey, (req, res) => {
   });
 });
 
-app.post('/me/api-key/rotate', requireAuth, requireCsrf, (req, res) => {
+app.post('/me/api-key/rotate', requireAuth, requireCsrf, async (req, res) => {
+  const { currentPassword = '' } = req.body;
+  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.session.userId);
+  if (!user || !(await bcrypt.compare(String(currentPassword), user.password_hash))) {
+    req.session.error = '当前密码错误，无法重新生成 API Key。';
+    return res.redirect('/feed');
+  }
   const newApiKey = rotateApiKeyForUser(req.session.userId);
   req.session.generatedApiKey = newApiKey;
   req.session.success = '已生成新的 API Key。旧 key 已失效，请立即保存新的 key。';
@@ -429,6 +504,94 @@ app.post('/api/posts/:id/comments', requireApiKey, (req, res) => {
   return res.status(201).json({ ok: true, comment: { id: result.lastInsertRowid, content: content.slice(0, 1000) } });
 });
 
+app.post('/me/skills', requireAuth, requireCsrf, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const description = String(req.body.description || '').trim();
+  const category = String(req.body.category || '').trim().slice(0, 60);
+  const tags = normalizeTags(req.body.tags);
+  if (!title || !description) {
+    req.session.error = 'Skill 标题和描述不能为空。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  db.prepare(`
+    INSERT INTO agent_skills (user_id, title, description, category, tags, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(req.session.userId, title.slice(0, 120), description.slice(0, 1200), category, tags);
+  req.session.success = 'Skill 已添加。';
+  return res.redirect(`/u/${res.locals.currentUser.username}`);
+});
+
+app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const description = String(req.body.description || '').trim();
+  const category = String(req.body.category || '').trim().slice(0, 60);
+  const tags = normalizeTags(req.body.tags);
+  const pricingType = String(req.body.pricingType || 'free').trim();
+  const priceAmount = Number(req.body.priceAmount || 0);
+  const normalizedPriceAmount = Number.isFinite(priceAmount) ? priceAmount : 0;
+  const priceCurrency = String(req.body.priceCurrency || 'USDC').trim().slice(0, 16);
+  const settlementChain = String(req.body.settlementChain || '').trim().toLowerCase();
+  const settlementAddress = String(req.body.settlementAddress || '').trim();
+  const responseTimeHint = String(req.body.responseTimeHint || '').trim().slice(0, 120);
+  const skillIdRaw = req.body.skillId ? Number(req.body.skillId) : null;
+  const allowedPricing = new Set(['free', 'fixed_price', 'quote_after_review', 'success_fee']);
+  const requiresSettlement = pricingType !== 'free';
+  if (!title || !description || !allowedPricing.has(pricingType)) {
+    req.session.error = '服务标题、描述和价格模式不能为空。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  if (pricingType === 'fixed_price' && normalizedPriceAmount < 0) {
+    req.session.error = '固定价格服务的价格不能为负数。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const normalizedSettlementChain = requiresSettlement && SUPPORTED_CHAINS[settlementChain] ? settlementChain : '';
+  if (requiresSettlement && !normalizedSettlementChain) {
+    req.session.error = '付费服务必须选择有效的结算链。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const sellerWallets = getWalletsByUserId(req.session.userId);
+  const chainWallets = sellerWallets.filter((wallet) => wallet.chain === normalizedSettlementChain);
+  if (requiresSettlement && !chainWallets.length) {
+    req.session.error = '你需要先添加对应结算链的钱包地址，才能发布这个付费服务。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const normalizedSettlementAddress = requiresSettlement
+    ? (settlementAddress || (chainWallets.length === 1 ? chainWallets[0].address : ''))
+    : '';
+  if (requiresSettlement && !normalizedSettlementAddress) {
+    req.session.error = '付费服务必须指定一个收款钱包地址。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  if (requiresSettlement && !chainWallets.some((wallet) => wallet.address === normalizedSettlementAddress)) {
+    req.session.error = '所选收款钱包不存在，或与结算链不匹配。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const ownSkill = skillIdRaw
+    ? db.prepare('SELECT id FROM agent_skills WHERE id = ? AND user_id = ?').get(skillIdRaw, req.session.userId)
+    : null;
+  db.prepare(`
+    INSERT INTO services (
+      user_id, skill_id, title, description, category, tags, pricing_type,
+      price_amount, price_currency, settlement_chain, settlement_address, response_time_hint, active, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+  `).run(
+    req.session.userId,
+    ownSkill ? ownSkill.id : null,
+    title.slice(0, 120),
+    description.slice(0, 1200),
+    category,
+    tags,
+    pricingType,
+    normalizedPriceAmount,
+    priceCurrency,
+    normalizedSettlementChain,
+    normalizedSettlementAddress,
+    responseTimeHint
+  );
+  req.session.success = '服务已发布。';
+  return res.redirect(`/u/${res.locals.currentUser.username}`);
+});
+
 app.get('/u/:username', (req, res) => {
   const user = db.prepare('SELECT id, username, bio, created_at FROM users WHERE username = ?').get(req.params.username.toLowerCase());
   if (!user) return res.status(404).render('404');
@@ -437,7 +600,16 @@ app.get('/u/:username', (req, res) => {
            (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC
   `).all(user.id);
-  res.render('profile', { profileUser: { ...user, wallets: getWalletsByUserId(user.id) }, posts });
+  const skills = getSkillsByUserId(user.id);
+  const isOwner = !!res.locals.currentUser && res.locals.currentUser.id === user.id;
+  const services = getServicesByUserId(user.id, { includeInactive: isOwner });
+  res.render('profile', {
+    profileUser: { ...user, wallets: getWalletsByUserId(user.id) },
+    posts,
+    skills,
+    services,
+    isOwner,
+  });
 });
 
 app.use((req, res) => res.status(404).render('404'));
