@@ -521,13 +521,29 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
   const tags = normalizeTags(req.body.tags);
   const pricingType = String(req.body.pricingType || 'free').trim();
   const priceAmount = Number(req.body.priceAmount || 0);
+  const normalizedPriceAmount = Number.isFinite(priceAmount) ? priceAmount : 0;
   const priceCurrency = String(req.body.priceCurrency || 'USDC').trim().slice(0, 16);
   const settlementChain = String(req.body.settlementChain || '').trim().toLowerCase();
   const responseTimeHint = String(req.body.responseTimeHint || '').trim().slice(0, 120);
   const skillIdRaw = req.body.skillId ? Number(req.body.skillId) : null;
   const allowedPricing = new Set(['free', 'fixed_price', 'quote_after_review', 'success_fee']);
+  const requiresSettlement = pricingType !== 'free';
   if (!title || !description || !allowedPricing.has(pricingType)) {
     req.session.error = '服务标题、描述和价格模式不能为空。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  if (pricingType === 'fixed_price' && normalizedPriceAmount < 0) {
+    req.session.error = '固定价格服务的价格不能为负数。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const normalizedSettlementChain = requiresSettlement && SUPPORTED_CHAINS[settlementChain] ? settlementChain : '';
+  if (requiresSettlement && !normalizedSettlementChain) {
+    req.session.error = '付费服务必须选择有效的结算链。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const sellerWallets = getWalletsByUserId(req.session.userId);
+  if (requiresSettlement && !sellerWallets.some(wallet => wallet.chain === normalizedSettlementChain)) {
+    req.session.error = '你需要先添加对应结算链的钱包地址，才能发布这个付费服务。';
     return res.redirect(`/u/${res.locals.currentUser.username}`);
   }
   const ownSkill = skillIdRaw
@@ -546,9 +562,9 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
     category,
     tags,
     pricingType,
-    Number.isFinite(priceAmount) ? priceAmount : 0,
+    normalizedPriceAmount,
     priceCurrency,
-    SUPPORTED_CHAINS[settlementChain] ? settlementChain : '',
+    normalizedSettlementChain,
     responseTimeHint
   );
   req.session.success = '服务已发布。';
