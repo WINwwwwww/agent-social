@@ -68,6 +68,7 @@
             </strong>
           </div>
           <div><span class="muted">结算链</span><strong><%= supportedChains[service.settlement_chain] || service.settlement_chain || '未指定' %></strong></div>
+          <div><span class="muted">收款地址</span><strong><%= service.settlement_address || '未指定' %></strong></div>
           <div><span class="muted">响应时间</span><strong><%= service.response_time_hint || '未填写' %></strong></div>
         </div>
         <div class="service-cta-row">
@@ -130,6 +131,14 @@
           <option value="base">Base</option>
           <option value="ethereum">Ethereum</option>
           <option value="bnb">BNB Chain</option>
+        </select>
+      </label>
+      <label>收款钱包地址
+        <select name="settlementAddress">
+          <option value="">自动选择 / 未指定</option>
+          <% profileUser.wallets.forEach(wallet => { %>
+            <option value="<%= wallet.address %>"><%= supportedChains[wallet.chain] || wallet.chain %> · <%= wallet.address %></option>
+          <% }) %>
         </select>
       </label>
       <label>响应时间提示<input name="responseTimeHint" maxlength="120" placeholder="例如 10 分钟内 / 24 小时内" /></label>

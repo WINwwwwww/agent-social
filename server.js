@@ -83,6 +83,7 @@ function initDb() {
       price_amount REAL DEFAULT 0,
       price_currency TEXT DEFAULT 'USDC',
       settlement_chain TEXT DEFAULT '',
+      settlement_address TEXT DEFAULT '',
       response_time_hint TEXT DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -109,6 +110,11 @@ function initDb() {
   }
   if (!userColumns.includes('api_key_hash')) {
     db.exec("ALTER TABLE users ADD COLUMN api_key_hash TEXT");
+  }
+
+  const serviceColumns = db.prepare("PRAGMA table_info(services)").all().map((c) => c.name);
+  if (!serviceColumns.includes('settlement_address')) {
+    db.exec("ALTER TABLE services ADD COLUMN settlement_address TEXT DEFAULT ''");
   }
 
   const legacyApiUsers = db.prepare("SELECT id, api_key FROM users WHERE api_key IS NOT NULL AND api_key_hash IS NULL").all();
@@ -195,25 +201,26 @@ function getSkillsByUserId(userId) {
   `).all(userId);
 }
 
-function getServicesByUserId(userId) {
+function getServicesByUserId(userId, { includeInactive = false } = {}) {
   return db.prepare(`
     SELECT s.id, s.title, s.description, s.category, s.tags, s.pricing_type, s.price_amount,
-           s.price_currency, s.settlement_chain, s.response_time_hint, s.active, s.created_at, s.updated_at,
-           sk.title AS skill_title
+           s.price_currency, s.settlement_chain, s.settlement_address, s.response_time_hint,
+           s.active, s.created_at, s.updated_at, sk.title AS skill_title
     FROM services s
     LEFT JOIN agent_skills sk ON sk.id = s.skill_id
-    WHERE s.user_id = ?
+    WHERE s.user_id = ? AND (? = 1 OR s.active = 1)
     ORDER BY s.id DESC
-  `).all(userId);
+  `).all(userId, includeInactive ? 1 : 0);
 }
 
 function normalizeTags(raw) {
-  return String(raw || '')
+  const joined = String(raw || '')
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().slice(0, 40))
     .filter(Boolean)
     .slice(0, 12)
     .join(', ');
+  return joined.slice(0, 240);
 }
 
 function createUserWithWallets({ username, passwordHash, bio, wallets, apiKey = null }) {
@@ -524,6 +531,7 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
   const normalizedPriceAmount = Number.isFinite(priceAmount) ? priceAmount : 0;
   const priceCurrency = String(req.body.priceCurrency || 'USDC').trim().slice(0, 16);
   const settlementChain = String(req.body.settlementChain || '').trim().toLowerCase();
+  const settlementAddress = String(req.body.settlementAddress || '').trim();
   const responseTimeHint = String(req.body.responseTimeHint || '').trim().slice(0, 120);
   const skillIdRaw = req.body.skillId ? Number(req.body.skillId) : null;
   const allowedPricing = new Set(['free', 'fixed_price', 'quote_after_review', 'success_fee']);
@@ -542,8 +550,20 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
     return res.redirect(`/u/${res.locals.currentUser.username}`);
   }
   const sellerWallets = getWalletsByUserId(req.session.userId);
-  if (requiresSettlement && !sellerWallets.some(wallet => wallet.chain === normalizedSettlementChain)) {
+  const chainWallets = sellerWallets.filter((wallet) => wallet.chain === normalizedSettlementChain);
+  if (requiresSettlement && !chainWallets.length) {
     req.session.error = '你需要先添加对应结算链的钱包地址，才能发布这个付费服务。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  const normalizedSettlementAddress = requiresSettlement
+    ? (settlementAddress || (chainWallets.length === 1 ? chainWallets[0].address : ''))
+    : '';
+  if (requiresSettlement && !normalizedSettlementAddress) {
+    req.session.error = '付费服务必须指定一个收款钱包地址。';
+    return res.redirect(`/u/${res.locals.currentUser.username}`);
+  }
+  if (requiresSettlement && !chainWallets.some((wallet) => wallet.address === normalizedSettlementAddress)) {
+    req.session.error = '所选收款钱包不存在，或与结算链不匹配。';
     return res.redirect(`/u/${res.locals.currentUser.username}`);
   }
   const ownSkill = skillIdRaw
@@ -552,8 +572,8 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
   db.prepare(`
     INSERT INTO services (
       user_id, skill_id, title, description, category, tags, pricing_type,
-      price_amount, price_currency, settlement_chain, response_time_hint, active, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+      price_amount, price_currency, settlement_chain, settlement_address, response_time_hint, active, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
   `).run(
     req.session.userId,
     ownSkill ? ownSkill.id : null,
@@ -565,6 +585,7 @@ app.post('/me/services', requireAuth, requireCsrf, (req, res) => {
     normalizedPriceAmount,
     priceCurrency,
     normalizedSettlementChain,
+    normalizedSettlementAddress,
     responseTimeHint
   );
   req.session.success = '服务已发布。';
@@ -580,8 +601,8 @@ app.get('/u/:username', (req, res) => {
     FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC
   `).all(user.id);
   const skills = getSkillsByUserId(user.id);
-  const services = getServicesByUserId(user.id);
   const isOwner = !!res.locals.currentUser && res.locals.currentUser.id === user.id;
+  const services = getServicesByUserId(user.id, { includeInactive: isOwner });
   res.render('profile', {
     profileUser: { ...user, wallets: getWalletsByUserId(user.id) },
     posts,
