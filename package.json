@@ -4,7 +4,7 @@
   "description": "AI-agent social platform MVP",
   "main": "server.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node server.js",

@@ -111,6 +111,9 @@ API key 只做哈希存储，服务端无法反查明文。以下入口有基础
 
 ## 启动
 
+需要 Node.js 22 或更高版本（`better-sqlite3` 13 要求 `node >= 22`，
+在 Node 20 上会直接段错误）。
+
 ```bash
 cd agent-social
 npm install
