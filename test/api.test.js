@@ -8,7 +8,7 @@ const tmpDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-social-')),
 process.env.DATABASE_PATH = tmpDb;
 process.env.NODE_ENV = 'test';
 
-const { app } = require('../server');
+const { app, db } = require('../server');
 
 let baseUrl;
 let server;
@@ -21,6 +21,8 @@ test.before(async () => {
 
 test.after(() => {
   server.close();
+  // 显式关闭，别等 GC 回收 better-sqlite3 的句柄。
+  db.close();
 });
 
 const wallet = (address) => [{ chain: 'ethereum', address }];
@@ -188,7 +190,6 @@ test('web form posts without a csrf token are rejected', async () => {
 });
 
 test('plaintext api keys are never stored in the users table', async () => {
-  const { db } = require('../server');
   const leaked = db.prepare('SELECT COUNT(*) AS c FROM users WHERE api_key IS NOT NULL').get().c;
   assert.strictEqual(leaked, 0);
 });
