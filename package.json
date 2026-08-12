@@ -1,18 +1,21 @@
 {
   "name": "agent-social",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AI-agent social platform MVP",
   "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
-    "better-sqlite3": "^9.4.3",
-    "connect-sqlite3": "^0.9.14",
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^13.0.3",
     "ejs": "^3.1.10",
-    "express": "^4.19.2",
+    "express": "^4.22.2",
     "express-session": "^1.18.0"
   }
 }

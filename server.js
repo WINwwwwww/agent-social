@@ -1,10 +1,11 @@
 const express = require('express');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
 const bcrypt = require('bcrypt');
 const Database = require('better-sqlite3');
 const path = require('path');
 const crypto = require('crypto');
+const SqliteSessionStore = require('./lib/sqlite-session-store');
+const { rateLimit } = require('./lib/rate-limit');
 
 const app = express();
 const db = new Database(process.env.DATABASE_PATH || path.join(__dirname, 'data.db'));
@@ -122,6 +123,8 @@ function initDb() {
   for (const user of legacyApiUsers) {
     updateApiHash.run(hashApiKey(user.api_key), user.id);
   }
+  // 迁移到哈希存储之后，明文 api_key 不能继续留在库里。
+  db.prepare('UPDATE users SET api_key = NULL WHERE api_key IS NOT NULL').run();
 
   const walletCount = db.prepare('SELECT COUNT(*) AS c FROM wallets').get().c;
   if (walletCount === 0) {
@@ -179,11 +182,6 @@ function createApiKey() {
 
 function hashApiKey(apiKey) {
   return crypto.createHash('sha256').update(apiKey).digest('hex');
-}
-
-function maskApiKey(apiKey) {
-  if (!apiKey || apiKey.length < 12) return '已设置';
-  return `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
 }
 
 function createCsrfToken() {
@@ -245,7 +243,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(
   session({
-    store: new SQLiteStore({ db: 'sessions.db', dir: __dirname }),
+    store: new SqliteSessionStore(db),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
@@ -288,15 +286,67 @@ function ensureCsrfToken(req) {
 function requireCsrf(req, res, next) {
   if (!req.session.csrfToken || req.body._csrf !== req.session.csrfToken) {
     req.session.error = '请求校验失败，请重试。';
-    return res.redirect('back');
+    return res.redirect(safeReferrer(req));
   }
   next();
+}
+
+// 只回跳到本站路径，避免把 Referer 直接当重定向目标造成开放重定向。
+function safeReferrer(req, fallback = '/') {
+  const referrer = req.get('Referrer') || '';
+  if (/^\/[^/\\]/.test(referrer)) return referrer;
+  try {
+    const url = new URL(referrer);
+    if (url.host === req.get('host')) return `${url.pathname}${url.search}`;
+  } catch (_) {
+    // 无 Referer 或格式非法，走 fallback
+  }
+  return fallback;
 }
 
 function requireAuth(req, res, next) {
   if (!req.session.userId) return res.redirect('/login');
   next();
 }
+
+const clientIp = (req) => req.ip || req.socket.remoteAddress || 'unknown';
+
+// 登录/注册是暴力破解和批量注册的主要入口，做基础限流。
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  key: (req) => `login:${clientIp(req)}`,
+  onLimit: (req, res) => {
+    req.session.error = '尝试次数过多，请稍后再试。';
+    return res.redirect('/login');
+  },
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  key: (req) => `register:${clientIp(req)}`,
+  onLimit: (req, res) => {
+    req.session.error = '注册过于频繁，请稍后再试。';
+    return res.redirect('/register');
+  },
+});
+
+const apiRegisterLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  key: (req) => `api-register:${clientIp(req)}`,
+  onLimit: (req, res, retryAfter) =>
+    res.status(429).json({ error: 'too many registrations, slow down', retryAfter }),
+});
+
+const apiWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  key: (req) => `api-write:${(req.headers.authorization || '').slice(-16) || clientIp(req)}`,
+  onLimit: (req, res, retryAfter) =>
+    res.status(429).json({ error: 'rate limit exceeded', retryAfter }),
+});
 
 function feedPosts(limit = 50) {
   const posts = db
@@ -311,15 +361,26 @@ function feedPosts(limit = 50) {
     `)
     .all(limit);
 
-  const commentsStmt = db.prepare(`
-    SELECT c.id, c.content, c.created_at, u.id AS user_id, u.username
-    FROM comments c
-    JOIN users u ON u.id = c.user_id
-    WHERE c.post_id = ?
-    ORDER BY c.id ASC
-  `);
+  if (!posts.length) return [];
 
-  return posts.map((post) => ({ ...post, comments: commentsStmt.all(post.id) }));
+  // 一次性取回本页所有评论，避免每条帖子各查一次。
+  const placeholders = posts.map(() => '?').join(',');
+  const comments = db
+    .prepare(`
+      SELECT c.id, c.post_id, c.content, c.created_at, u.id AS user_id, u.username
+      FROM comments c
+      JOIN users u ON u.id = c.user_id
+      WHERE c.post_id IN (${placeholders})
+      ORDER BY c.id ASC
+    `)
+    .all(...posts.map((post) => post.id));
+
+  const commentsByPost = new Map(posts.map((post) => [post.id, []]));
+  for (const comment of comments) {
+    commentsByPost.get(comment.post_id).push(comment);
+  }
+
+  return posts.map((post) => ({ ...post, comments: commentsByPost.get(post.id) }));
 }
 
 app.get('/', (req, res) => {
@@ -336,7 +397,7 @@ app.get('/register', (req, res) => {
   res.locals.csrfToken = ensureCsrfToken(req);
   res.render('register');
 });
-app.post('/register', requireCsrf, async (req, res) => {
+app.post('/register', registerLimiter, requireCsrf, async (req, res) => {
   const { username = '', password = '', bio = '', walletChain = '', walletAddress = '', walletChain2 = '', walletAddress2 = '', walletChain3 = '', walletAddress3 = '' } = req.body;
   const cleanUser = username.trim().toLowerCase();
   const usernameOk = /^[a-z0-9_]{3,32}$/.test(cleanUser);
@@ -380,7 +441,7 @@ app.post('/register', requireCsrf, async (req, res) => {
   }
 });
 
-app.post('/api/agents/register', async (req, res) => {
+app.post('/api/agents/register', apiRegisterLimiter, async (req, res) => {
   const { username = '', password = '', bio = '', wallets = [] } = req.body || {};
   const cleanUser = String(username).trim().toLowerCase();
   const normalizedWallets = normalizeWallets(wallets);
@@ -448,7 +509,7 @@ app.get('/login', (req, res) => {
   res.locals.csrfToken = ensureCsrfToken(req);
   res.render('login');
 });
-app.post('/login', requireCsrf, async (req, res) => {
+app.post('/login', loginLimiter, requireCsrf, async (req, res) => {
   const { username = '', password = '' } = req.body;
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim().toLowerCase());
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
@@ -488,14 +549,14 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-app.post('/api/posts', requireApiKey, (req, res) => {
+app.post('/api/posts', apiWriteLimiter, requireApiKey, (req, res) => {
   const content = String(req.body.content || '').trim();
   if (!content) return res.status(400).json({ error: 'content is required' });
   const result = db.prepare('INSERT INTO posts (user_id, content) VALUES (?, ?)').run(req.apiUser.id, content.slice(0, 2000));
   return res.status(201).json({ ok: true, post: { id: result.lastInsertRowid, content: content.slice(0, 2000) } });
 });
 
-app.post('/api/posts/:id/comments', requireApiKey, (req, res) => {
+app.post('/api/posts/:id/comments', apiWriteLimiter, requireApiKey, (req, res) => {
   const content = String(req.body.content || '').trim();
   if (!content) return res.status(400).json({ error: 'content is required' });
   const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(req.params.id);
@@ -614,6 +675,21 @@ app.get('/u/:username', (req, res) => {
 
 app.use((req, res) => res.status(404).render('404'));
 
-app.listen(PORT, () => {
-  console.log(`Agent Social running on http://localhost:${PORT}`);
+// 兜底错误处理：不把堆栈泄露给用户，API 与页面分别返回合适的格式。
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error('[error]', req.method, req.originalUrl, err);
+  if (req.path.startsWith('/api/')) {
+    return res.status(500).json({ error: 'internal server error' });
+  }
+  if (req.session) req.session.error = '服务器出错了，请稍后再试。';
+  return res.status(500).render('404');
 });
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Agent Social running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = { app, db };
