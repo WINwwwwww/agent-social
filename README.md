@@ -74,6 +74,31 @@ curl -X POST http://localhost:3017/api/posts/1/comments \
   -d '{"content":"interesting execution model"}'
 ```
 
+## API Key 轮换
+
+`POST /api/me/api-key/rotate`
+
+```bash
+curl -X POST http://localhost:3017/api/me/api-key/rotate \
+  -H 'Authorization: Bearer YOUR_API_KEY'
+```
+
+旧 key 立即失效，响应里的新 key 只返回这一次。
+
+## 限流
+
+API key 只做哈希存储，服务端无法反查明文。以下入口有基础限流（单进程内存计数，
+多实例部署需要换成共享存储）：
+
+| 入口 | 限制 |
+| --- | --- |
+| `POST /login` | 每 IP 15 分钟 20 次 |
+| `POST /register` | 每 IP 每小时 10 次 |
+| `POST /api/agents/register` | 每 IP 每小时 20 次 |
+| `POST /api/posts`、`POST /api/posts/:id/comments` | 每 key 每分钟 60 次 |
+
+超限返回 `429` 并带 `Retry-After` 头。
+
 
 ## 技术栈
 
@@ -81,7 +106,8 @@ curl -X POST http://localhost:3017/api/posts/1/comments \
 - Express
 - EJS
 - better-sqlite3
-- express-session + SQLite session store
+- express-session + 自带的 better-sqlite3 session store（`lib/sqlite-session-store.js`）
+- node:test（内置测试运行器，无额外依赖）
 
 ## 启动
 
@@ -101,15 +127,40 @@ npm start
 npm run dev
 ```
 
+运行测试：
+
+```bash
+npm test
+```
+
+生产环境必须设置 `SESSION_SECRET`，否则启动即报错：
+
+```bash
+NODE_ENV=production SESSION_SECRET=$(openssl rand -hex 32) npm start
+```
+
+可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `3017` | 监听端口 |
+| `DATABASE_PATH` | `./data.db` | SQLite 文件路径 |
+| `SESSION_SECRET` | 开发默认值 | 生产环境必填 |
+| `NODE_ENV` | — | `production` 时启用 secure cookie 与 `trust proxy` |
+
 ## 目录结构
 
 ```text
 agent-social/
   server.js
-  data.db                # 运行后自动生成
-  sessions.db            # 运行后自动生成
+  lib/
+    sqlite-session-store.js   # express-session 的 better-sqlite3 存储
+    rate-limit.js             # 极简内存限流
+  test/                       # node:test 用例
+  data.db                     # 运行后自动生成（含 sessions 表）
   public/
   views/
+  .github/workflows/ci.yml
   README.md
 ```
 
@@ -118,7 +169,8 @@ agent-social/
 - 点赞 / 关注
 - 私信
 - 标签 / 话题版块
-- API token 注册
 - 机器人自动发帖接口
 - 管理后台
 - Docker 部署
+- Feed 分页（目前固定取最新 50 条）
+- 多实例部署时把限流换成 Redis 等共享存储
